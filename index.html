@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="十三張" />
+<meta name="theme-color" content="#1a0f0a" />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<title>十三張 · 記分簿</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;700&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  html, body, #root {
+    margin: 0; padding: 0; height: 100%;
+    background: #f4ede0;
+    overscroll-behavior: none;
+  }
+  body {
+    font-family: "Noto Sans TC", -apple-system, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    /* respect iPhone safe area */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  input { font-family: inherit; }
+  /* hide number input arrows */
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button {
+    -webkit-appearance: none; margin: 0;
+  }
+  input[type=number] { -moz-appearance: textfield; }
+  button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
+  .loading-screen {
+    height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: "Noto Serif TC", serif; color: #1a0f0a;
+    font-size: 1.2rem; letter-spacing: 0.3em;
+  }
+</style>
+</head>
+<body>
+<div id="root"><div class="loading-screen">載 入 中</div></div>
+
+<!-- React and ReactDOM from CDN -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<!-- Babel for in-browser JSX -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+// ===== localStorage shim (replaces window.storage from Claude's environment) =====
+const storage = {
+  get: async (key) => {
+    const v = localStorage.getItem(key);
+    return v !== null ? { value: v } : null;
+  },
+  set: async (key, value) => {
+    localStorage.setItem(key, value);
+    return { value };
+  },
+  delete: async (key) => {
+    localStorage.removeItem(key);
+    return { deleted: true };
+  },
+  list: async (prefix) => {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(prefix)) keys.push(k);
+    }
+    return { keys };
+  },
+};
+
+// ===== Inline icon components (replace lucide-react) =====
+const Icon = ({ size = 16, children, fill = "none", color }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width={size} height={size} viewBox="0 0 24 24"
+    fill={fill} stroke={color || "currentColor"}
+    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+    style={{ display: "inline-block", verticalAlign: "middle" }}
+  >
+    {children}
+  </svg>
+);
+
+const Trash2 = (p) => <Icon {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></Icon>;
+const History = (p) => <Icon {...p}><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><polyline points="3 3 3 8 8 8"/><path d="M12 7v5l3 2"/></Icon>;
+const Play = (p) => <Icon {...p} fill={p.fill || "currentColor"}><polygon points="6 4 20 12 6 20 6 4"/></Icon>;
+const Check = (p) => <Icon {...p}><polyline points="20 6 9 17 4 12"/></Icon>;
+const X = (p) => <Icon {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></Icon>;
+const ChevronRight = (p) => <Icon {...p}><polyline points="9 18 15 12 9 6"/></Icon>;
+const Crown = (p) => <Icon {...p} fill={p.fill || "none"}><path d="M2 19h20l-2-12-5 4-5-7-5 7-5-4z"/></Icon>;
+const Music2 = (p) => <Icon {...p}><circle cx="8" cy="18" r="3"/><circle cx="19" cy="16" r="3"/><path d="M11 18V4l11-2v14"/></Icon>;
+const ArrowLeft = (p) => <Icon {...p}><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></Icon>;
+
+// ===== Main app component =====
+function SapSaamJeungTracker() {
+  const [view, setView] = useState("home");
+  const [loading, setLoading] = useState(true);
+
+  const [players, setPlayers] = useState(["", "", "", ""]);
+  const [rounds, setRounds] = useState([]);
+  const [currentRoundInput, setCurrentRoundInput] = useState(["", "", "", ""]);
+  const [gameStartTime, setGameStartTime] = useState(null);
+  const [activeGameId, setActiveGameId] = useState(null);
+
+  const [history, setHistory] = useState([]);
+  const [viewingGame, setViewingGame] = useState(null);
+
+  const [showVideo, setShowVideo] = useState(false);
+  const VIDEO_ID = "Zy3vubo6UTo";
+
+  // ----- Video overlay listener -----
+  useEffect(() => {
+    if (!showVideo) return;
+    const subscribeTimer = setTimeout(() => {
+      const iframe = document.querySelector('iframe[title="賭神音樂"]');
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage(
+          JSON.stringify({ event: "listening", id: VIDEO_ID, channel: "widget" }),
+          "*"
+        );
+        iframe.contentWindow.postMessage(
+          JSON.stringify({ event: "command", func: "addEventListener", args: ["onStateChange"] }),
+          "*"
+        );
+      }
+    }, 800);
+
+    const handler = (event) => {
+      if (!event.data || typeof event.data !== "string") return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.event === "onStateChange" && data.info === 0) setShowVideo(false);
+        if (data.event === "infoDelivery" && data.info && data.info.playerState === 0) setShowVideo(false);
+      } catch (e) {}
+    };
+    window.addEventListener("message", handler);
+    return () => {
+      clearTimeout(subscribeTimer);
+      window.removeEventListener("message", handler);
+    };
+  }, [showVideo]);
+
+  // ----- Persistence -----
+  useEffect(() => {
+    (async () => {
+      try {
+        try {
+          const active = await storage.get("active_game");
+          if (active && active.value) {
+            const g = JSON.parse(active.value);
+            setPlayers(g.players);
+            setRounds(g.rounds);
+            setGameStartTime(g.startTime);
+            setActiveGameId(g.id);
+            setView("game");
+          }
+        } catch (e) {}
+
+        try {
+          const list = await storage.list("game:");
+          if (list && list.keys && list.keys.length > 0) {
+            const games = [];
+            for (const k of list.keys) {
+              try {
+                const r = await storage.get(k);
+                if (r && r.value) games.push(JSON.parse(r.value));
+              } catch (e) {}
+            }
+            games.sort((a, b) => (b.endTime || 0) - (a.endTime || 0));
+            setHistory(games);
+          }
+        } catch (e) {}
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (view === "game" && activeGameId) {
+      const payload = { id: activeGameId, players, rounds, startTime: gameStartTime };
+      storage.set("active_game", JSON.stringify(payload)).catch(() => {});
+    }
+  }, [rounds, players, view, activeGameId, gameStartTime]);
+
+  // ----- Helpers -----
+  const totals = players.map((_, i) =>
+    rounds.reduce((sum, r) => sum + (Number(r.scores[i]) || 0), 0)
+  );
+
+  const validateRoundInput = () => {
+    const parsed = currentRoundInput.map((v) => {
+      if (v === "" || v === "-") return { empty: true, value: null };
+      const n = Number(v);
+      if (isNaN(n)) return { empty: false, value: null, invalid: true };
+      return { empty: false, value: n };
+    });
+    const emptyCount = parsed.filter((p) => p.empty).length;
+    const invalidCount = parsed.filter((p) => p.invalid).length;
+    if (invalidCount > 0) return { ok: false };
+    if (emptyCount === 1) {
+      const filledSum = parsed.reduce((a, p) => a + (p.empty ? 0 : p.value), 0);
+      const nums = parsed.map((p) => (p.empty ? -filledSum : p.value));
+      const autoIdx = parsed.findIndex((p) => p.empty);
+      return { ok: true, nums, autoIdx };
+    }
+    if (emptyCount > 1) return { ok: false };
+    const nums = parsed.map((p) => p.value);
+    const sum = nums.reduce((a, b) => a + b, 0);
+    if (sum !== 0) return { ok: false, sum };
+    return { ok: true, nums, autoIdx: null };
+  };
+
+  const addRound = () => {
+    const v = validateRoundInput();
+    if (!v.ok) return;
+    setRounds([...rounds, { scores: v.nums }]);
+    setCurrentRoundInput(["", "", "", ""]);
+  };
+
+  const removeRound = (idx) => setRounds(rounds.filter((_, i) => i !== idx));
+
+  const startNewGame = () => {
+    if (players.some((p) => !p.trim())) return;
+    const id = `game:${Date.now()}`;
+    setActiveGameId(id);
+    setGameStartTime(Date.now());
+    setRounds([]);
+    setCurrentRoundInput(["", "", "", ""]);
+    setView("game");
+  };
+
+  const finishGame = async () => {
+    if (rounds.length === 0) {
+      await storage.delete("active_game").catch(() => {});
+      resetActive();
+      setView("home");
+      return;
+    }
+    const game = { id: activeGameId, players, rounds, startTime: gameStartTime, endTime: Date.now() };
+    try {
+      await storage.set(activeGameId, JSON.stringify(game));
+      await storage.delete("active_game");
+    } catch (e) {}
+    setHistory([game, ...history]);
+    resetActive();
+    setView("home");
+  };
+
+  const abandonGame = async () => {
+    await storage.delete("active_game").catch(() => {});
+    resetActive();
+    setView("home");
+  };
+
+  const resetActive = () => {
+    setPlayers(["", "", "", ""]);
+    setRounds([]);
+    setCurrentRoundInput(["", "", "", ""]);
+    setGameStartTime(null);
+    setActiveGameId(null);
+  };
+
+  const deleteHistoryGame = async (id) => {
+    try { await storage.delete(id); } catch (e) {}
+    setHistory(history.filter((g) => g.id !== id));
+    if (viewingGame && viewingGame.id === id) {
+      setViewingGame(null);
+      setView("history");
+    }
+  };
+
+  const fmtDate = (ts) => {
+    if (!ts) return "";
+    const d = new Date(ts);
+    return d.toLocaleDateString("zh-HK", { month: "short", day: "numeric" }) +
+      " " + d.toLocaleTimeString("zh-HK", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  // ----- Theme -----
+  const c = {
+    ink: "#1a0f0a",
+    paper: "#f4ede0",
+    paperDeep: "#ebe1cf",
+    crimson: "#8b1a1a",
+    crimsonDeep: "#5c0e0e",
+    gold: "#a07820",
+    goldLight: "#c9a14a",
+    jade: "#2d5a3d",
+    muted: "#7a6b56",
+  };
+  const fontD = `"Noto Serif TC", "Songti SC", "STSong", Georgia, serif`;
+  const fontB = `"Noto Sans TC", "PingFang TC", -apple-system, sans-serif`;
+  const fontM = `"JetBrains Mono", "Courier New", monospace`;
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: "100vh", background: c.paper, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: fontD, color: c.ink }}>
+        <div style={{ fontSize: "1.2rem", letterSpacing: "0.3em" }}>載 入 中</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      minHeight: "100vh",
+      maxHeight: "100vh",
+      background: c.paper,
+      backgroundImage: `radial-gradient(circle at 20% 10%, rgba(139,26,26,0.04) 0%, transparent 40%), radial-gradient(circle at 80% 90%, rgba(160,120,32,0.05) 0%, transparent 40%)`,
+      fontFamily: fontB,
+      color: c.ink,
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+    }}>
+      {/* HEADER BAR */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "0.5rem 0.75rem", background: c.ink,
+        borderBottom: `2px solid ${c.gold}`, minHeight: "44px", gap: "0.5rem",
+        flexShrink: 0,
+      }}>
+        <div style={{ minWidth: "36px" }}>
+          {(view === "setup" || view === "history" || view === "history_detail") && (
+            <button
+              onClick={() => {
+                if (view === "history_detail") { setViewingGame(null); setView("history"); }
+                else setView("home");
+              }}
+              aria-label="Back"
+              style={{
+                background: "transparent", border: "none", color: c.goldLight,
+                cursor: "pointer", padding: "0.4rem", display: "flex",
+                alignItems: "center", justifyContent: "center",
+              }}
+            >
+              <ArrowLeft size={18} />
+            </button>
+          )}
+        </div>
+        <div style={{
+          flex: 1, textAlign: "center", fontFamily: fontD,
+          fontSize: "1rem", fontWeight: 700, letterSpacing: "0.25em",
+          color: c.goldLight, whiteSpace: "nowrap",
+        }}>
+          {view === "home" ? "十 三 張" :
+           view === "setup" ? "入 座" :
+           view === "game" ? `第 ${rounds.length + 1} 局` :
+           view === "history" ? "戰 績 簿" :
+           view === "history_detail" ? "戰 局 詳 情" : "十 三 張"}
+        </div>
+        <div style={{ minWidth: "36px", display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={() => setShowVideo(true)}
+            aria-label="賭神音樂"
+            style={{
+              background: "transparent", border: `1px solid ${c.gold}66`,
+              color: c.goldLight, cursor: "pointer", padding: "0.35rem 0.5rem",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            <Music2 size={16} />
+          </button>
+        </div>
+      </div>
+
+      {/* MAIN CONTENT */}
+      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {view === "home" && (
+          <div style={{ padding: "1rem", overflow: "auto", flex: 1 }}>
+            <div style={{ textAlign: "center", marginBottom: "1.5rem", marginTop: "0.5rem" }}>
+              <div style={{
+                fontFamily: fontM, fontSize: "0.6rem", letterSpacing: "0.4em",
+                color: c.muted, textTransform: "uppercase",
+              }}>
+                Sap Saam Jeung · Score Tracker
+              </div>
+              <div style={{
+                fontFamily: fontD, fontSize: "2.5rem", fontWeight: 700,
+                letterSpacing: "0.15em", color: c.crimsonDeep,
+                marginTop: "0.5rem", lineHeight: 1,
+              }}>
+                十 三 張
+              </div>
+              <div style={{
+                fontFamily: fontD, fontSize: "0.8rem", color: c.gold,
+                fontStyle: "italic", marginTop: "0.4rem", letterSpacing: "0.2em",
+              }}>
+                — 記 分 簿 —
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: "0.6rem" }}>
+              <button onClick={() => setView("setup")} style={{
+                background: c.crimsonDeep, color: c.paper, border: "none",
+                padding: "1rem 1.25rem", cursor: "pointer", textAlign: "left",
+                display: "flex", alignItems: "center", gap: "1rem", fontFamily: "inherit",
+              }}>
+                <div style={{
+                  background: c.gold, color: c.paper, width: "36px", height: "36px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <Play size={16} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: fontD, fontSize: "1.15rem", letterSpacing: "0.2em", fontWeight: 700 }}>開 局</div>
+                  <div style={{ fontSize: "0.7rem", opacity: 0.7, marginTop: "0.1rem" }}>Start New Game</div>
+                </div>
+                <ChevronRight size={18} style={{ opacity: 0.5 }} />
+              </button>
+
+              <button onClick={() => setView("history")} style={{
+                background: c.paperDeep, color: c.ink,
+                border: `1px solid ${c.gold}55`, padding: "1rem 1.25rem",
+                cursor: "pointer", textAlign: "left", display: "flex",
+                alignItems: "center", gap: "1rem", fontFamily: "inherit",
+              }}>
+                <div style={{
+                  background: c.crimson, color: c.paper, width: "36px", height: "36px",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <History size={16} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: fontD, fontSize: "1.15rem", letterSpacing: "0.2em", fontWeight: 700 }}>戰 績</div>
+                  <div style={{ fontSize: "0.7rem", opacity: 0.7, marginTop: "0.1rem" }}>
+                    {history.length} {history.length === 1 ? "game" : "games"}
+                  </div>
+                </div>
+                <ChevronRight size={18} style={{ opacity: 0.5 }} />
+              </button>
+            </div>
+
+            {history.length > 0 && (
+              <div style={{ marginTop: "1.5rem" }}>
+                <div style={{
+                  fontFamily: fontM, fontSize: "0.65rem", letterSpacing: "0.25em",
+                  color: c.muted, textTransform: "uppercase", marginBottom: "0.5rem",
+                }}>
+                  Recent
+                </div>
+                <div style={{ display: "grid", gap: "0.4rem" }}>
+                  {history.slice(0, 3).map((g) => (
+                    <CompactHistoryRow key={g.id} game={g} c={c} fontD={fontD} fontM={fontM} fmtDate={fmtDate}
+                      onClick={() => { setViewingGame(g); setView("history_detail"); }} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {view === "setup" && (
+          <div style={{ padding: "1rem", overflow: "auto", flex: 1, display: "flex", flexDirection: "column" }}>
+            <div style={{
+              fontFamily: fontM, fontSize: "0.7rem", letterSpacing: "0.2em",
+              color: c.muted, textTransform: "uppercase", marginBottom: "0.75rem",
+            }}>
+              Seat the Players
+            </div>
+            <div style={{ display: "grid", gap: "0.5rem" }}>
+              {players.map((p, i) => (
+                <div key={i} style={{
+                  display: "flex", alignItems: "center", gap: "0.75rem",
+                  background: c.paperDeep, border: `1px solid ${c.gold}33`,
+                  padding: "0.75rem 1rem",
+                }}>
+                  <div style={{
+                    fontFamily: fontD, fontSize: "1.25rem", color: c.crimson,
+                    width: "24px", textAlign: "center",
+                  }}>
+                    {["東", "南", "西", "北"][i]}
+                  </div>
+                  <input
+                    value={p}
+                    onChange={(e) => { const next = [...players]; next[i] = e.target.value; setPlayers(next); }}
+                    placeholder={`Player ${i + 1}`}
+                    style={{
+                      flex: 1, background: "transparent", border: "none",
+                      borderBottom: `1px solid ${c.ink}33`, padding: "0.4rem 0",
+                      fontFamily: fontB, fontSize: "1rem", color: c.ink, outline: "none",
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}>
+              <button onClick={() => { setPlayers(["", "", "", ""]); setView("home"); }} style={btnSec(c, fontD)}>
+                取 消
+              </button>
+              <button onClick={startNewGame} disabled={players.some((p) => !p.trim())}
+                style={btnPri(c, fontD, players.some((p) => !p.trim()))}>
+                開 始 →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {view === "game" && (
+          <GameView
+            players={players} rounds={rounds} totals={totals}
+            currentRoundInput={currentRoundInput} setCurrentRoundInput={setCurrentRoundInput}
+            validateRoundInput={validateRoundInput} addRound={addRound} removeRound={removeRound}
+            finishGame={finishGame} abandonGame={abandonGame}
+            c={c} fontD={fontD} fontM={fontM}
+          />
+        )}
+
+        {view === "history" && (
+          <div style={{ padding: "1rem", overflow: "auto", flex: 1 }}>
+            {history.length === 0 ? (
+              <div style={{
+                padding: "2rem 1rem", textAlign: "center", color: c.muted,
+                fontFamily: fontD, fontStyle: "italic",
+                border: `1px dashed ${c.gold}55`,
+              }}>
+                尚 未 有 戰 績
+                <div style={{ fontFamily: fontM, fontSize: "0.65rem", letterSpacing: "0.2em", textTransform: "uppercase", marginTop: "0.5rem" }}>
+                  no games recorded
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: "0.4rem" }}>
+                {history.map((g) => (
+                  <CompactHistoryRow key={g.id} game={g} c={c} fontD={fontD} fontM={fontM} fmtDate={fmtDate}
+                    onClick={() => { setViewingGame(g); setView("history_detail"); }} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {view === "history_detail" && viewingGame && (
+          <HistoryDetail
+            game={viewingGame}
+            c={c} fontD={fontD} fontM={fontM} fmtDate={fmtDate}
+            onDelete={() => deleteHistoryGame(viewingGame.id)}
+          />
+        )}
+      </div>
+
+      {/* VIDEO OVERLAY */}
+      {showVideo && (
+        <div onClick={() => setShowVideo(false)} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)",
+          zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center",
+          padding: "1rem", backdropFilter: "blur(8px)",
+        }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxWidth: "900px", position: "relative" }}>
+            <button onClick={() => setShowVideo(false)} aria-label="Close" style={{
+              position: "absolute", top: "-40px", right: "0",
+              background: "transparent", border: `1px solid ${c.goldLight}`,
+              color: c.goldLight, width: "32px", height: "32px", cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <X size={16} />
+            </button>
+            <div style={{
+              position: "relative", paddingBottom: "56.25%", height: 0, overflow: "hidden",
+              border: `2px solid ${c.gold}`, boxShadow: `0 0 40px ${c.gold}44, 0 0 80px ${c.crimson}22`,
+            }}>
+              <iframe
+                src={`https://www.youtube-nocookie.com/embed/${VIDEO_ID}?autoplay=1&enablejsapi=1&rel=0`}
+                title="賭神音樂"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
+              />
+            </div>
+            <div style={{
+              textAlign: "center", marginTop: "0.75rem",
+              fontFamily: fontD, fontSize: "0.75rem", letterSpacing: "0.3em", color: c.goldLight,
+            }}>
+              賭 神 駕 到
+            </div>
+            <div style={{
+              textAlign: "center", marginTop: "0.4rem",
+              fontFamily: fontM, fontSize: "0.65rem", letterSpacing: "0.1em",
+            }}>
+              <a
+                href={`https://www.youtube.com/watch?v=${VIDEO_ID}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: `${c.goldLight}aa`, textDecoration: "underline" }}
+              >
+                video not loading? open on youtube ↗
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===== GAME VIEW (single-screen) =====
+function GameView({ players, rounds, totals, currentRoundInput, setCurrentRoundInput,
+                    validateRoundInput, addRound, removeRound, finishGame, abandonGame,
+                    c, fontD, fontM }) {
+  const ranking = totals.map((t, i) => ({ idx: i, total: t })).sort((a, b) => b.total - a.total);
+  const v = validateRoundInput();
+
+  return (
+    <div style={{
+      flex: 1, display: "flex", flexDirection: "column", minHeight: 0,
+      padding: "0.5rem", gap: "0.5rem",
+    }}>
+      {/* STANDINGS — 2x2 compact */}
+      <div style={{
+        background: c.ink, color: c.paper, padding: "0.55rem 0.7rem",
+        display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.3rem 0.8rem",
+        flexShrink: 0,
+      }}>
+        {ranking.map((r, rankIdx) => (
+          <div key={r.idx} style={{
+            display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem",
+          }}>
+            <div style={{
+              width: "18px", textAlign: "center", flexShrink: 0,
+              color: rankIdx === 0 ? c.goldLight : `${c.paper}99`,
+              fontFamily: fontD, fontSize: "0.8rem",
+            }}>
+              {rankIdx === 0 ? <Crown size={13} fill={c.goldLight} color={c.goldLight} /> : rankIdx + 1}
+            </div>
+            <div style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {players[r.idx]}
+            </div>
+            <div style={{
+              fontFamily: fontM, fontWeight: 700, fontSize: "0.95rem", flexShrink: 0,
+              color: r.total > 0 ? c.goldLight : r.total < 0 ? "#d97a7a" : c.paper,
+            }}>
+              {r.total > 0 ? "+" : ""}{r.total}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* SCORE ENTRY — 2x2 grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.4rem", flexShrink: 0 }}>
+        {players.map((p, i) => {
+          const isAuto = v.ok && v.autoIdx === i;
+          const rawVal = currentRoundInput[i];
+          const numVal = rawVal === "" || rawVal === "-" ? null : Number(rawVal);
+          const displayVal = isAuto ? v.nums[i] : numVal;
+
+          const adjust = (delta) => {
+            const next = [...currentRoundInput];
+            const current = numVal === null ? 0 : numVal;
+            next[i] = String(current + delta);
+            setCurrentRoundInput(next);
+          };
+
+          return (
+            <div key={i} style={{
+              background: isAuto ? `${c.gold}15` : c.paperDeep,
+              border: `1px solid ${isAuto ? c.gold : c.gold + "33"}`,
+              padding: "0.35rem 0.4rem",
+            }}>
+              <div style={{
+                fontSize: "0.6rem", color: isAuto ? c.gold : c.muted,
+                fontFamily: fontM, letterSpacing: "0.05em", textTransform: "uppercase",
+                fontWeight: isAuto ? 700 : 400,
+                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                marginBottom: "0.25rem",
+              }}>
+                {["東", "南", "西", "北"][i]} · {p}{isAuto ? " · auto" : ""}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "40px 1fr 40px", gap: "0.25rem" }}>
+                <button
+                  type="button" onClick={() => adjust(-1)} disabled={isAuto} aria-label="Minus"
+                  style={{
+                    background: isAuto ? `${c.crimson}33` : c.crimson, color: c.paper,
+                    border: "none", fontSize: "1.1rem", fontWeight: 700,
+                    cursor: isAuto ? "not-allowed" : "pointer",
+                    padding: "0.35rem 0", touchAction: "manipulation", userSelect: "none",
+                  }}
+                >−</button>
+                <input
+                  type="number" inputMode="numeric"
+                  value={isAuto ? v.nums[i] : rawVal}
+                  readOnly={isAuto}
+                  onChange={(e) => {
+                    const next = [...currentRoundInput]; next[i] = e.target.value; setCurrentRoundInput(next);
+                  }}
+                  placeholder="0"
+                  style={{
+                    background: "transparent", border: "none",
+                    fontFamily: fontM, fontSize: "1.1rem", fontWeight: 700,
+                    color: displayVal === null ? c.muted : displayVal > 0 ? c.jade : displayVal < 0 ? c.crimson : c.ink,
+                    outline: "none", textAlign: "center", boxSizing: "border-box", width: "100%",
+                    padding: 0, minWidth: 0,
+                  }}
+                />
+                <button
+                  type="button" onClick={() => adjust(1)} disabled={isAuto} aria-label="Plus"
+                  style={{
+                    background: isAuto ? `${c.jade}33` : c.jade, color: c.paper,
+                    border: "none", fontSize: "1.1rem", fontWeight: 700,
+                    cursor: isAuto ? "not-allowed" : "pointer",
+                    padding: "0.35rem 0", touchAction: "manipulation", userSelect: "none",
+                  }}
+                >+</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* RECORD ROUND */}
+      <button onClick={addRound} disabled={!v.ok} style={{
+        width: "100%", padding: "0.65rem", flexShrink: 0,
+        background: v.ok ? c.crimson : `${c.crimson}44`, color: c.paper, border: "none",
+        fontFamily: fontD, fontSize: "0.9rem", letterSpacing: "0.25em",
+        cursor: v.ok ? "pointer" : "not-allowed",
+      }}>
+        記 錄 此 局 +
+        {!v.ok && v.sum !== undefined && (
+          <span style={{ fontFamily: fontM, fontSize: "0.65rem", letterSpacing: "0.1em", marginLeft: "0.4rem", opacity: 0.8 }}>
+            (sum: {v.sum > 0 ? "+" : ""}{v.sum})
+          </span>
+        )}
+      </button>
+
+      {/* ROUND LOG — fills remaining height, scrolls internally */}
+      <div style={{
+        flex: 1, minHeight: "60px", display: "flex", flexDirection: "column",
+        background: c.paperDeep, border: `1px solid ${c.gold}33`,
+      }}>
+        <div style={{
+          display: "grid", gridTemplateColumns: "24px repeat(4, 1fr) 22px",
+          gap: "0.25rem", padding: "0.35rem 0.5rem",
+          borderBottom: `1px solid ${c.gold}33`,
+          fontFamily: fontM, fontSize: "0.55rem", letterSpacing: "0.08em",
+          color: c.muted, textTransform: "uppercase", flexShrink: 0,
+        }}>
+          <div>#</div>
+          {players.map((p, i) => (
+            <div key={i} style={{ textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {p.length > 5 ? p.slice(0, 4) + "…" : p}
+            </div>
+          ))}
+          <div></div>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          {rounds.length === 0 ? (
+            <div style={{
+              padding: "0.75rem", textAlign: "center", color: c.muted,
+              fontFamily: fontD, fontStyle: "italic", fontSize: "0.8rem",
+            }}>
+              尚 未 開 局
+            </div>
+          ) : (
+            rounds.map((r, idx) => (
+              <div key={idx} style={{
+                display: "grid", gridTemplateColumns: "24px repeat(4, 1fr) 22px",
+                gap: "0.25rem", padding: "0.4rem 0.5rem",
+                borderBottom: idx < rounds.length - 1 ? `1px solid ${c.gold}22` : "none",
+                alignItems: "center",
+              }}>
+                <div style={{ fontFamily: fontD, color: c.crimson, fontSize: "0.8rem" }}>{idx + 1}</div>
+                {r.scores.map((s, i) => (
+                  <div key={i} style={{
+                    textAlign: "center", fontFamily: fontM, fontSize: "0.8rem", fontWeight: 600,
+                    color: s > 0 ? c.jade : s < 0 ? c.crimson : c.muted,
+                  }}>
+                    {s > 0 ? "+" : ""}{s}
+                  </div>
+                ))}
+                <button onClick={() => removeRound(idx)} aria-label="Delete" style={{
+                  background: "transparent", border: "none", color: c.muted, cursor: "pointer",
+                  padding: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <X size={11} />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* GAME ACTIONS */}
+      <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
+        <button onClick={abandonGame} style={{ ...btnSec(c, fontD), padding: "0.55rem", fontSize: "0.85rem" }}>
+          放 棄
+        </button>
+        <button onClick={finishGame} style={{ ...btnPri(c, fontD, false), padding: "0.55rem", fontSize: "0.85rem" }}>
+          <Check size={13} style={{ marginRight: "0.3rem" }} /> 完 局
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ===== HISTORY DETAIL =====
+function HistoryDetail({ game, c, fontD, fontM, fmtDate, onDelete }) {
+  const totals = game.players.map((_, i) =>
+    game.rounds.reduce((sum, r) => sum + (Number(r.scores[i]) || 0), 0)
+  );
+  const ranking = totals.map((t, i) => ({ idx: i, total: t })).sort((a, b) => b.total - a.total);
+
+  return (
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, padding: "0.5rem", gap: "0.5rem" }}>
+      <div style={{
+        fontFamily: fontM, fontSize: "0.6rem", letterSpacing: "0.15em",
+        color: c.muted, textTransform: "uppercase", flexShrink: 0,
+      }}>
+        {fmtDate(game.startTime)} → {fmtDate(game.endTime)}
+      </div>
+
+      <div style={{
+        background: c.ink, color: c.paper, padding: "0.55rem 0.7rem",
+        display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.3rem 0.8rem",
+        flexShrink: 0,
+      }}>
+        {ranking.map((r, rankIdx) => (
+          <div key={r.idx} style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.85rem" }}>
+            <div style={{
+              width: "18px", textAlign: "center", flexShrink: 0,
+              color: rankIdx === 0 ? c.goldLight : `${c.paper}99`,
+              fontFamily: fontD, fontSize: "0.8rem",
+            }}>
+              {rankIdx === 0 ? <Crown size={13} fill={c.goldLight} color={c.goldLight} /> : rankIdx + 1}
+            </div>
+            <div style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {game.players[r.idx]}
+            </div>
+            <div style={{
+              fontFamily: fontM, fontWeight: 700, fontSize: "0.95rem", flexShrink: 0,
+              color: r.total > 0 ? c.goldLight : r.total < 0 ? "#d97a7a" : c.paper,
+            }}>
+              {r.total > 0 ? "+" : ""}{r.total}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{
+        flex: 1, minHeight: 0, display: "flex", flexDirection: "column",
+        background: c.paperDeep, border: `1px solid ${c.gold}33`,
+      }}>
+        <div style={{
+          display: "grid", gridTemplateColumns: "24px repeat(4, 1fr)",
+          gap: "0.25rem", padding: "0.35rem 0.5rem",
+          borderBottom: `1px solid ${c.gold}33`,
+          fontFamily: fontM, fontSize: "0.55rem", letterSpacing: "0.08em",
+          color: c.muted, textTransform: "uppercase", flexShrink: 0,
+        }}>
+          <div>#</div>
+          {game.players.map((p, i) => (
+            <div key={i} style={{ textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {p.length > 5 ? p.slice(0, 4) + "…" : p}
+            </div>
+          ))}
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+          {game.rounds.map((r, idx) => (
+            <div key={idx} style={{
+              display: "grid", gridTemplateColumns: "24px repeat(4, 1fr)",
+              gap: "0.25rem", padding: "0.4rem 0.5rem",
+              borderBottom: `1px solid ${c.gold}22`, alignItems: "center",
+            }}>
+              <div style={{ fontFamily: fontD, color: c.crimson, fontSize: "0.8rem" }}>{idx + 1}</div>
+              {r.scores.map((s, i) => (
+                <div key={i} style={{
+                  textAlign: "center", fontFamily: fontM, fontSize: "0.8rem", fontWeight: 600,
+                  color: s > 0 ? c.jade : s < 0 ? c.crimson : c.muted,
+                }}>
+                  {s > 0 ? "+" : ""}{s}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div style={{
+          display: "grid", gridTemplateColumns: "24px repeat(4, 1fr)",
+          gap: "0.25rem", padding: "0.45rem 0.5rem",
+          background: c.paper, borderTop: `2px solid ${c.gold}`, flexShrink: 0,
+        }}>
+          <div style={{ fontFamily: fontD, color: c.crimsonDeep, fontSize: "0.7rem", letterSpacing: "0.08em" }}>總</div>
+          {totals.map((t, i) => (
+            <div key={i} style={{
+              textAlign: "center", fontFamily: fontM, fontSize: "0.9rem", fontWeight: 700,
+              color: t > 0 ? c.jade : t < 0 ? c.crimson : c.ink,
+            }}>
+              {t > 0 ? "+" : ""}{t}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <button
+        onClick={() => { if (window.confirm("確定刪除此戰局?")) onDelete(); }}
+        style={{
+          padding: "0.6rem", background: "transparent", color: c.crimson,
+          border: `1px solid ${c.crimson}55`, fontFamily: fontD,
+          fontSize: "0.85rem", letterSpacing: "0.2em", cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem",
+          flexShrink: 0,
+        }}
+      >
+        <Trash2 size={13} /> 刪 除 此 戰 局
+      </button>
+    </div>
+  );
+}
+
+// ===== COMPACT HISTORY ROW =====
+function CompactHistoryRow({ game, c, fontD, fontM, fmtDate, onClick }) {
+  const totals = game.players.map((_, i) =>
+    game.rounds.reduce((sum, r) => sum + (Number(r.scores[i]) || 0), 0)
+  );
+  const winnerIdx = totals.indexOf(Math.max(...totals));
+
+  return (
+    <button onClick={onClick} style={{
+      background: c.paperDeep, border: `1px solid ${c.gold}33`,
+      padding: "0.6rem 0.8rem", cursor: "pointer", textAlign: "left",
+      display: "flex", alignItems: "center", gap: "0.6rem", fontFamily: "inherit",
+    }}>
+      <Crown size={16} fill={c.gold} color={c.gold} style={{ flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontFamily: fontD, fontSize: "0.95rem", color: c.crimsonDeep, fontWeight: 700,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        }}>
+          {game.players[winnerIdx]} · {totals[winnerIdx] > 0 ? "+" : ""}{totals[winnerIdx]}
+        </div>
+        <div style={{
+          fontFamily: fontM, fontSize: "0.6rem", color: c.muted,
+          letterSpacing: "0.08em", marginTop: "0.1rem", textTransform: "uppercase",
+        }}>
+          {game.rounds.length} {game.rounds.length === 1 ? "rd" : "rds"} · {fmtDate(game.endTime)}
+        </div>
+      </div>
+      <ChevronRight size={14} color={c.muted} style={{ flexShrink: 0 }} />
+    </button>
+  );
+}
+
+// ===== BUTTON STYLES =====
+const btnPri = (c, fontD, disabled) => ({
+  flex: 1, padding: "0.7rem",
+  background: disabled ? `${c.crimsonDeep}55` : c.crimsonDeep,
+  color: c.paper, border: "none",
+  fontFamily: fontD, fontSize: "0.95rem", letterSpacing: "0.25em",
+  cursor: disabled ? "not-allowed" : "pointer",
+  display: "flex", alignItems: "center", justifyContent: "center",
+});
+
+const btnSec = (c, fontD) => ({
+  flex: 1, padding: "0.7rem",
+  background: "transparent", color: c.ink,
+  border: `1px solid ${c.ink}55`,
+  fontFamily: fontD, fontSize: "0.95rem", letterSpacing: "0.25em",
+  cursor: "pointer",
+});
+
+
+// ===== Mount =====
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<SapSaamJeungTracker />);
+</script>
+</body>
+</html>
