@@ -309,7 +309,11 @@ function SapSaamJeungTracker() {
     goldLight: "#c9a14a",
     jade: "#2d5a3d",
     muted: "#7a6b56",
+    // Round log banding: cycles every 3 rows, repeats every 12 rows
+    bands: ["#ebe1cf", "#ecdbc0", "#dde0c8", "#e8d4cc"],
   };
+  // Returns the background color for round index `idx` (0-based) using a 3-row banding cycle
+  const bandColor = (idx) => c.bands[Math.floor(idx / 3) % 4];
   const fontD = `"Noto Serif TC", "Songti SC", "STSong", Georgia, serif`;
   const fontB = `"Noto Sans TC", "PingFang TC", -apple-system, sans-serif`;
   const fontM = `"JetBrains Mono", "Courier New", monospace`;
@@ -776,6 +780,7 @@ function GameView({ players, rounds, totals, currentRoundInput, setCurrentRoundI
               <div key={idx} style={{
                 display: "grid", gridTemplateColumns: "24px repeat(4, 1fr) 22px",
                 gap: "0.25rem", padding: "0.4rem 0.5rem",
+                background: c.bands[Math.floor(idx / 3) % 4],
                 borderBottom: idx < rounds.length - 1 ? `1px solid ${c.gold}22` : "none",
                 alignItems: "center",
               }}>
@@ -879,6 +884,7 @@ function HistoryDetail({ game, c, fontD, fontM, fmtDate, onDelete }) {
             <div key={idx} style={{
               display: "grid", gridTemplateColumns: "24px repeat(4, 1fr)",
               gap: "0.25rem", padding: "0.4rem 0.5rem",
+              background: c.bands[Math.floor(idx / 3) % 4],
               borderBottom: `1px solid ${c.gold}22`, alignItems: "center",
             }}>
               <div style={{ fontFamily: fontD, color: c.crimson, fontSize: "0.8rem" }}>{idx + 1}</div>
